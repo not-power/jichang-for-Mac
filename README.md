@@ -9,7 +9,7 @@
 
 ## 下载
 
-[鸡场 Mac 0.10.0（Apple Silicon）](dist/鸡场-0.10.0-arm64.dmg)
+[鸡场 Mac 0.10.0（Apple Silicon）](https://github.com/not-power/jichang-for-Mac/releases/download/v0.10.0/JichangMac-0.10.0-arm64.dmg)
 
 安装包未经过 Apple 公证。首次打开时，macOS 可能需要在「隐私与安全性」中确认打开。
 
