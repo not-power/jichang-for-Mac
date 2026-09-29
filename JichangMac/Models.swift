@@ -175,6 +175,8 @@ struct ConfigTemplate: Codable, Identifiable, Equatable, Sendable {
     var rawYaml: String
     var fileName: String
     var createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+    var remoteURL: String? = nil
+    var refreshedAt: Int64? = nil
 }
 
 struct RuleProviderStatus: Codable, Equatable, Sendable {

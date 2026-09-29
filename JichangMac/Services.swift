@@ -1,7 +1,7 @@
 import Foundation
 import Yams
 
-struct GeneratedConfig {
+struct GeneratedConfig: Sendable {
     var yaml: String
     var exportedNodes: Int
     var skippedNodes: Int
@@ -216,6 +216,10 @@ private extension Sequence {
 }
 
 enum SubscriptionParser {
+    @concurrent
+    static func parseInBackground(_ text: String, sourceId: String?) async throws -> (nodes: [ProxyNode], skipped: Int) {
+        try parse(text, sourceId: sourceId)
+    }
     static func parse(_ text: String, sourceId: String? = nil) throws -> (nodes: [ProxyNode], skipped: Int) {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty { throw ServiceError.noNodes }

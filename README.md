@@ -1,6 +1,6 @@
 # 鸡场 Mac
 
-面向 Mihomo 配置管理的 macOS 原生应用。使用 Swift、SwiftUI、AppKit 和 Yams 开发，不使用跨平台框架。
+面向 Mihomo 配置管理的 macOS 原生应用。界面使用 Swift 与 AppKit，YAML 使用 Yams 处理，不使用 SwiftUI 或跨平台框架。
 
 ## 要求
 
@@ -14,7 +14,9 @@
 
 ## 下载
 
-[鸡场 Mac 0.9.9（Apple Silicon）](dist/JichangMac-0.9.9-arm64.dmg)
+[鸡场 Mac 0.10.0（Apple Silicon）](dist/鸡场-0.10.0-arm64.dmg)
+
+原生边栏包含概览、资源、规则和分享。资源与规则使用系统表格和检查器；模板支持从 HTTP(S) 地址下载、查看变更并手动刷新。
 
 Mac 版数据保存在本机。可通过版本化 `.jichangbackup` 文件与 Android 版互相迁移，备份包含规则集缓存，不使用云同步。
 

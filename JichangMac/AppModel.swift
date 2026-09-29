@@ -5,16 +5,22 @@ import Yams
 
 @MainActor @Observable
 final class AppModel {
+    @ObservationIgnored var didChange: (() -> Void)?
     var state: AppState
     var notice: String?
-    var isWorking = false
+    var workingIDs: Set<String> = []
+    var isWorking: Bool { !workingIDs.isEmpty }
     var searchText = ""
     var generatedConfig: GeneratedConfig?
+    var generationIsCurrent = false
 
     private let stateURL: URL
     private let cacheRoot: URL
     private let encoder: JSONEncoder
     private let decoder = JSONDecoder()
+    private let pipeline = ConfigurationPipeline()
+    private var revision = 0
+    private var saveTask: Task<Void, Never>?
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -29,24 +35,47 @@ final class AppModel {
             state = AppState()
         }
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: stateURL.path) { persist() }
-        regenerate()
+        persist(immediate: true)
     }
 
     var activeProfile: ConfigProfile { state.activeProfile }
 
-    func persist() {
-        do {
-            let data = try encoder.encode(state)
-            try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: stateURL, options: .atomic)
-            regenerate()
-        } catch { notice = "保存失败：\(error.localizedDescription)" }
+    func persist(immediate: Bool = false) {
+        revision += 1
+        let requestedRevision = revision
+        let snapshot = state
+        let url = stateURL
+        generationIsCurrent = false
+        didChange?()
+        saveTask?.cancel()
+        saveTask = Task { [pipeline] in
+            if !immediate {
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            guard !Task.isCancelled else { return }
+            guard let outcome = await pipeline.process(snapshot, revision: requestedRevision, at: url),
+                  requestedRevision == revision else { return }
+            switch outcome {
+            case .ready(let config): generatedConfig = config; generationIsCurrent = true
+            case .failed(let message): generatedConfig = nil; notice = message; generationIsCurrent = true
+            }
+            didChange?()
+        }
     }
 
     func regenerate() {
-        do { generatedConfig = try MihomoConfigGenerator.generate(state) }
-        catch { generatedConfig = nil; notice = "配置生成失败：\(error.localizedDescription)" }
+        persist(immediate: true)
+    }
+
+    func flush() async {
+        saveTask?.cancel()
+        revision += 1
+        if let outcome = await pipeline.process(state, revision: revision, at: stateURL) {
+            switch outcome {
+            case .ready(let config): generatedConfig = config; generationIsCurrent = true
+            case .failed(let message): generatedConfig = nil; notice = message; generationIsCurrent = true
+            }
+        }
     }
 
     func setActiveProfile(_ id: String) {
@@ -81,15 +110,17 @@ final class AppModel {
     func refreshSource(_ sourceId: String) async {
         guard let sourceIndex = state.sources.firstIndex(where: { $0.id == sourceId }) else { return }
         var source = state.sources[sourceIndex]
-        isWorking = true
-        defer { isWorking = false }
+        let operation = "source:\(sourceId)"
+        workingIDs.insert(operation)
+        didChange?()
+        defer { workingIDs.remove(operation); didChange?() }
         do {
             var request = URLRequest(url: URL(string: source.url)!)
             request.setValue("JichangMac/1.0", forHTTPHeaderField: "User-Agent")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw ServiceError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? -1) }
             let raw = String(decoding: data, as: UTF8.self)
-            let result = try SubscriptionParser.parse(raw, sourceId: source.id)
+            let result = try await SubscriptionParser.parseInBackground(raw, sourceId: source.id)
             let previousNodes = state.nodes.filter { $0.sourceId == source.id }
             var priorIDsByIdentity = Dictionary(grouping: previousNodes, by: nodeIdentity).mapValues { $0.map(\.id) }
             var occurrences: [String: Int] = [:]
@@ -122,19 +153,19 @@ final class AppModel {
             source.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
             source.lastError = nil
             source.providerCompatible = raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("proxies:")
-            state.sources[sourceIndex] = source
+            if let index = state.sources.firstIndex(where: { $0.id == sourceId }) { state.sources[index] = source }
             notice = "订阅已更新，识别 \(result.nodes.count) 个节点。"
         } catch {
             source.lastError = error.localizedDescription
-            state.sources[sourceIndex] = source
+            if let index = state.sources.firstIndex(where: { $0.id == sourceId }) { state.sources[index] = source }
             notice = "订阅刷新失败：\(error.localizedDescription)"
         }
         persist()
     }
 
-    func importNodes(_ rawText: String) {
+    func importNodes(_ rawText: String) async {
         do {
-            let parsed = try SubscriptionParser.parse(rawText)
+            let parsed = try await SubscriptionParser.parseInBackground(rawText, sourceId: nil)
             state.nodes.append(contentsOf: parsed.nodes)
             var profile = activeProfile
             profile.enabledNodeIds.formUnion(parsed.nodes.map(\.id))
@@ -142,6 +173,22 @@ final class AppModel {
             notice = "已导入 \(parsed.nodes.count) 个节点，跳过 \(parsed.skipped) 条。"
             persist()
         } catch { notice = error.localizedDescription }
+    }
+
+    func removeSource(_ id: String) {
+        let nodeIDs = Set(state.nodes.filter { $0.sourceId == id }.map(\.id))
+        state.sources.removeAll { $0.id == id }
+        state.nodes.removeAll { $0.sourceId == id }
+        for index in state.profiles.indices {
+            state.profiles[index].selectedSourceIds.remove(id)
+            state.profiles[index].enabledNodeIds.subtract(nodeIDs)
+            for groupIndex in state.profiles[index].ruleProfile.groups.indices {
+                state.profiles[index].ruleProfile.groups[groupIndex].members.removeAll {
+                    $0.hasPrefix("node:") && nodeIDs.contains(String($0.dropFirst(5)))
+                }
+            }
+        }
+        persist()
     }
 
     func removeNode(_ id: String) {
@@ -166,8 +213,48 @@ final class AppModel {
         } catch { notice = "模板 YAML 无效：\(error.localizedDescription)" }
     }
 
+    func downloadTemplate(url: String, name: String = "", replacing template: ConfigTemplate? = nil) async throws -> TemplateDownload {
+        let operation = "template:\(template?.id ?? "new")"
+        workingIDs.insert(operation)
+        didChange?()
+        defer { workingIDs.remove(operation); didChange?() }
+        return try await RemoteTemplateService.fetch(url: url, name: name, replacing: template)
+    }
+
+    func applyTemplate(_ download: TemplateDownload) throws {
+        if let id = download.existingTemplateID {
+            guard let index = state.templates.firstIndex(where: { $0.id == id }),
+                  state.templates[index].rawYaml == download.previousRawYaml else { throw RemoteTemplateError.stalePreview }
+            for profileIndex in state.profiles.indices where state.profiles[profileIndex].templateId == id {
+                for (key, oldValue) in download.previousRoot where state.profiles[profileIndex].mihomoSettings[key] == oldValue {
+                    state.profiles[profileIndex].mihomoSettings.removeValue(forKey: key)
+                }
+            }
+            state.templates[index].rawYaml = download.rawYaml
+            state.templates[index].remoteURL = download.remoteURL
+            state.templates[index].refreshedAt = download.refreshedAt
+        } else {
+            guard !state.templates.contains(where: { $0.name.localizedCaseInsensitiveCompare(download.name) == .orderedSame }) else {
+                throw RemoteTemplateError.duplicateName
+            }
+            state.templates.append(ConfigTemplate(id: UUID().uuidString, name: download.name,
+                                                  rawYaml: download.rawYaml, fileName: download.fileName,
+                                                  remoteURL: download.remoteURL, refreshedAt: download.refreshedAt))
+        }
+        persist(immediate: true)
+        notice = download.existingTemplateID == nil ? "远程模板已导入。" : "远程模板已更新。"
+    }
+
     func createProfile(from template: ConfigTemplate) {
-        addProfile(name: template.name, copyCurrent: false)
+        var name = template.name
+        var suffix = 2
+        while state.profiles.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+            name = "\(template.name) \(suffix)"
+            suffix += 1
+        }
+        let previousID = state.activeProfileId
+        addProfile(name: name, copyCurrent: false)
+        guard state.activeProfileId != previousID else { return }
         guard var profile = state.profiles.first(where: { $0.id == state.activeProfileId }) else { return }
         profile.templateId = template.id
         if let root = try? Yams.load(yaml: template.rawYaml) as? [String: Any] {
@@ -210,7 +297,9 @@ final class AppModel {
             if let rawSubRules = root["sub-rules"] as? [String: [String]] {
                 profile.ruleProfile.subRules = rawSubRules.map { name, rules in SubRuleProfile(name: name, rules: rules.compactMap(parseTemplateRule)) }
             }
-            profile.mihomoSettings = root.mapValues(JSONValue.init(foundationValue:))
+            // Template fields already enter the generated YAML as the base document.
+            // Only explicit profile edits belong in mihomoSettings.
+            profile.mihomoSettings = [:]
         }
         replaceActive(profile)
         persist()
@@ -239,8 +328,10 @@ final class AppModel {
 
     func refreshProvider(_ provider: RuleProvider) async {
         guard let url = URL(string: provider.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { notice = "规则集 URL 无效。"; return }
-        isWorking = true
-        defer { isWorking = false }
+        let operation = "provider:\(provider.id)"
+        workingIDs.insert(operation)
+        didChange?()
+        defer { workingIDs.remove(operation); didChange?() }
         do {
             var request = URLRequest(url: url)
             for (key, values) in provider.headers { request.setValue(values.joined(separator: ", "), forHTTPHeaderField: key) }
@@ -268,7 +359,7 @@ final class AppModel {
         try PortableBackup.restoreCaches(contents.cacheFiles, to: cacheRoot)
         state = restored
         try encoder.encode(restored).write(to: stateURL, options: .atomic)
-        regenerate()
+        persist(immediate: true)
         notice = "备份已恢复。"
     }
 
