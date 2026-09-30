@@ -32,6 +32,10 @@ release-output/
 *.swp
 *~
 
-# Keep verification scripts, excluding generated fixtures, renders and binaries.
-verification/*
-!verification/*.py
+# Local development helpers are not published with application source.
+/Tests/
+/scripts/
+/verification/
+/CHANGELOG.md
+/Package.swift
+/Package.resolved
