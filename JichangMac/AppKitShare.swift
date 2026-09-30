@@ -101,8 +101,8 @@ final class SharePage: WorkspacePage {
             workspace.shareServer?.update(config: yaml, fileName: profile.fileName + ".yaml")
         }
         let skipped = generated?.skippedNodes ?? 0
-        let unresolved = generated?.unresolvedTemplateProviders ?? []
-        issueLabel.stringValue = (generated?.issues.map(\.description) ?? []) .joined(separator: "\n") + "\n" + [skipped > 0 ? "跳过 \(skipped) 个不支持的节点" : nil, unresolved.isEmpty ? nil : "需绑定模板订阅：\(unresolved.joined(separator: "、"))"].compactMap { $0 }.joined(separator: "\n")
+        let templateProviders = generated?.templateProviders ?? []
+        issueLabel.stringValue = ((generated?.issues.map(\.description) ?? []) + (skipped > 0 ? ["跳过 \(skipped) 个不支持的节点"] : [])).joined(separator: "\n")
         sourcePicker.selectItem(at: profile.sourceMode == "REFERENCE_SUBSCRIPTIONS" ? 1 : 0)
         let ready = model.generationIsCurrent && generated?.canExport == true
         exportButton.isEnabled = ready; copyButton.isEnabled = ready
@@ -122,11 +122,11 @@ final class SharePage: WorkspacePage {
         let displayedYAML = generated?.yaml ?? (model.generationIsCurrent ? "无法生成配置。请检查 YAML。" : "正在生成配置…")
         if preview.string != displayedYAML { preview.string = displayedYAML }
         for child in bindingStack.arrangedSubviews { bindingStack.removeArrangedSubview(child); child.removeFromSuperview() }
-        if !unresolved.isEmpty {
-            bindingStack.addArrangedSubview(UI.secondary("为模板中的订阅选择来源："))
-            for name in unresolved {
+        if !templateProviders.isEmpty {
+            bindingStack.addArrangedSubview(UI.secondary("模板订阅 · 可选绑定"))
+            for name in templateProviders {
                 let picker = NSPopUpButton()
-                picker.addItem(withTitle: "未绑定")
+                picker.addItem(withTitle: "不绑定 · 使用本地节点或直连")
                 picker.item(at: 0)?.representedObject = ""
                 for source in model.state.sources where source.providerCompatible == true && profile.selectedSourceIds.contains(source.id) {
                     picker.addItem(withTitle: source.name); picker.lastItem?.representedObject = source.id

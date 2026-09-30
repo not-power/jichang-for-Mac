@@ -81,10 +81,6 @@ final class ConfigurationPage: WorkspacePage, NSTextViewDelegate {
             let panel = UI.panel(label, padding: 14)
             stack.addArrangedSubview(panel); panel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        for provider in config.unresolvedTemplateProviders {
-            let label = NSTextField(wrappingLabelWithString: "【错误】代理集合.\(provider)：请在分享页面绑定模板订阅。")
-            label.textColor = .systemRed; stack.addArrangedSubview(label)
-        }
     }
     @objc private func simulate() {
         guard let input = simulation?.stringValue else { return }

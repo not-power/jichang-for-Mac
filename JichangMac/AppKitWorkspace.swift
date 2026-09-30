@@ -300,10 +300,6 @@ final class WorkspaceController: NSSplitViewController, NSOutlineViewDataSource,
     }
     func exportConfig() {
         guard model.generationIsCurrent, model.generatedConfig?.canExport == true, let yaml = model.generatedConfig?.yaml else { UI.alert("配置仍在生成或存在错误，请稍后重试。") ; return }
-        if let unresolved = model.generatedConfig?.unresolvedTemplateProviders, !unresolved.isEmpty {
-            UI.alert("请先在“分享”中绑定模板订阅：\(unresolved.joined(separator: "、"))")
-            return
-        }
         let panel = NSSavePanel(); panel.nameFieldStringValue = model.activeProfile.fileName + ".yaml"
         panel.allowedContentTypes = [.yaml]
         do { if panel.runModal() == .OK, let url = panel.url { try yaml.write(to: url, atomically: true, encoding: .utf8) } }

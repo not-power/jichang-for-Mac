@@ -28,7 +28,51 @@ enum ConfigDocument {
         }
     }
 
-    static func dump(_ values: [String: JSONValue]) throws -> String { try Yams.dump(object: values.mapValues(\.foundationValue)) }
+    static func dump(_ values: [String: JSONValue]) throws -> String {
+        let yaml = try Yams.dump(object: values.mapValues(\.foundationValue), allowUnicode: true)
+        return try readableSupplementaryUnicode(yaml)
+    }
+    // libYAML still escapes supplementary scalars (emoji and some CJK characters).
+    // Replace only parsed double-quoted string tokens; literal backslash sequences stay intact.
+    private static func readableSupplementaryUnicode(_ yaml: String) throws -> String {
+        guard yaml.contains("\\U"), let root = try Yams.compose(yaml: yaml) else { return yaml }
+        var strings: [Node.Scalar] = []
+        func collect(_ node: Node) {
+            switch node {
+            case .scalar(let scalar):
+                if scalar.style == .doubleQuoted, scalar.string.unicodeScalars.contains(where: { $0.value > 0xFFFF }) { strings.append(scalar) }
+            case .sequence(let sequence): sequence.forEach(collect)
+            case .mapping(let mapping): mapping.forEach { collect($0.key); collect($0.value) }
+            case .alias: break
+            }
+        }
+        collect(root)
+        guard !strings.isEmpty else { return yaml }
+        var scalars = Array(yaml.unicodeScalars)
+        let lineStarts = [0] + scalars.indices.filter { scalars[$0] == "\n" }.map { $0 + 1 }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        var replacements: [(range: Range<Int>, value: [Unicode.Scalar])] = []
+        for string in strings {
+            guard let mark = string.mark, lineStarts.indices.contains(mark.line - 1) else { continue }
+            let start = lineStarts[mark.line - 1] + mark.column - 1
+            guard scalars.indices.contains(start), scalars[start] == "\"" else { continue }
+            var end = start + 1
+            while end < scalars.count {
+                if scalars[end] == "\\" { end += 2; continue }
+                if scalars[end] == "\"" { break }
+                end += 1
+            }
+            guard end < scalars.count else { continue }
+            let encoded = try encoder.encode(string.string)
+            guard let text = String(data: encoded, encoding: .utf8) else { throw ConfigError.message("YAML 字符串无法编码为 UTF-8。") }
+            replacements.append((start..<end + 1, Array(text.unicodeScalars)))
+        }
+        for replacement in replacements.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
+            scalars.replaceSubrange(replacement.range, with: replacement.value)
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
     static func merge(_ base: [String: JSONValue], _ override: [String: JSONValue]) -> [String: JSONValue] {
         base.merging(override) { old, new in
             if case .object(let left) = old, case .object(let right) = new { return .object(merge(left, right)) }
