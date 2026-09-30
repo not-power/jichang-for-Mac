@@ -1,5 +1,37 @@
 .DS_Store
-DerivedData/
-build/
+**/DerivedData/
+**/build/
+.build/
+.swiftpm/
 *.xcuserstate
-xcuserdata/
+**/xcuserdata/
+
+# Release assets are uploaded to GitHub Releases, never committed.
+dist/
+release-output/
+*.dmg
+*.pkg
+*.app/
+*.zip
+*.xcarchive/
+*.dSYM/
+*.ipa
+
+# Compiler outputs, caches and temporary files.
+.cache/
+*.o
+*.a
+*.dylib
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.profraw
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+
+# Keep verification scripts, excluding generated fixtures, renders and binaries.
+verification/*
+!verification/*.py
