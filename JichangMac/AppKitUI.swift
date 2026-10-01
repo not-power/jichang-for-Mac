@@ -153,12 +153,7 @@ enum UI {
         return alert.runModal() == .alertFirstButtonReturn ? fields.map(\.stringValue) : nil
     }
     static func textPrompt(_ title: String, initial: String = "", explanatory: String = "") -> String? {
-        let alert = NSAlert(); alert.messageText = title; alert.informativeText = explanatory
-        alert.addButton(withTitle: "确定"); alert.addButton(withTitle: "取消")
-        let (scroll, textView) = textEditor(initial)
-        scroll.frame = NSRect(x: 0, y: 0, width: 600, height: 280)
-        alert.accessoryView = scroll
-        return alert.runModal() == .alertFirstButtonReturn ? textView.string : nil
+        TextPromptDialog(title: title, initial: initial, explanatory: explanatory).run()
     }
     static func openText() -> (String, String)? {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.plainText, .yaml, .json]
@@ -166,6 +161,73 @@ enum UI {
         return (url.lastPathComponent, text)
     }
     static func separator() -> NSBox { let box = NSBox(); box.boxType = .separator; return box }
+}
+
+@MainActor
+private final class TextPromptDialog: NSObject, NSWindowDelegate {
+    private let panel: NSPanel
+    private let editor: NSTextView
+    private var result: String?
+
+    init(title: String, initial: String, explanatory: String) {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 460),
+                        styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let (scroll, textView) = UI.textEditor(initial)
+        editor = textView
+        super.init()
+        panel.title = title
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        let content = WorkspaceSurface()
+        content.frame = NSRect(x: 0, y: 0, width: 660, height: 460)
+        panel.contentView = content
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .textBackgroundColor
+        scroll.borderType = .bezelBorder
+        let heading = UI.label(title, style: .title2, weight: .semibold)
+        let detail = UI.secondary(explanatory)
+        detail.lineBreakMode = .byWordWrapping
+        detail.maximumNumberOfLines = 0
+        let cancel = UI.button("取消", target: self, action: #selector(cancelImport))
+        cancel.keyEquivalent = "\u{1b}"; cancel.keyEquivalentModifierMask = []
+        let confirm = UI.button("导入", target: self, action: #selector(confirmImport), prominent: true)
+        confirm.keyEquivalent = "\r"; confirm.keyEquivalentModifierMask = [.command]
+        let buttons = UI.horizontal([cancel, confirm])
+        [heading, detail, scroll, buttons].forEach { content.addSubview($0) }
+        NSLayoutConstraint.activate([
+            content.widthAnchor.constraint(greaterThanOrEqualToConstant: 520),
+            content.heightAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            heading.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            heading.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            heading.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            detail.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 8),
+            scroll.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 16),
+            scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -16),
+            buttons.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20)
+        ])
+        panel.contentMinSize = NSSize(width: 520, height: 360)
+        panel.setContentSize(NSSize(width: 660, height: 460))
+        editor.setAccessibilityLabel("节点链接或 Mihomo YAML")
+        panel.initialFirstResponder = editor
+    }
+
+    func run() -> String? {
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(editor)
+        NSApp.runModal(for: panel)
+        panel.orderOut(nil)
+        panel.close()
+        return result
+    }
+    @objc private func confirmImport() { result = editor.string; NSApp.stopModal(withCode: .OK) }
+    @objc private func cancelImport() { NSApp.stopModal(withCode: .cancel) }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { NSApp.stopModal(withCode: .cancel); return true }
 }
 
 /// Uses semantic AppKit colors so surfaces update with system appearance and contrast.

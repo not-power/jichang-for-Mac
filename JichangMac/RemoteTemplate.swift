@@ -47,7 +47,7 @@ enum RemoteTemplateService {
             throw RemoteTemplateError.invalidURL
         }
         var request = URLRequest(url: url)
-        request.setValue("鸡场/0.11.2", forHTTPHeaderField: "User-Agent")
+        request.setValue("鸡场/0.11.3", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await BoundedTemplateDownload(limit: maximumBytes).start(request)
         try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
