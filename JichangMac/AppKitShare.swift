@@ -14,7 +14,6 @@ final class SharePage: WorkspacePage {
     private let shareLink = NSTextField(wrappingLabelWithString: "")
     private let copyShareLinkButton = UI.button("复制分享链接", symbol: "link", target: nil, action: nil)
     private let qrView = NSImageView()
-    private let bindingStack = UI.vertical([], spacing: 8)
     private var starting = false
     private var cachedQRURL: String?
     private var cachedQRImage: NSImage?
@@ -47,7 +46,7 @@ final class SharePage: WorkspacePage {
         qrView.heightAnchor.constraint(equalToConstant: 165).isActive = true
         let shareURLRow = UI.vertical([shareLink, copyShareLinkButton], spacing: 8)
         let output = UI.panel(UI.section("输出配置", [profileLabel, countLabel, issueLabel]), padding: 18)
-        let source = UI.panel(UI.section("节点来源", [sourcePicker, bindingStack]), padding: 18)
+        let source = UI.panel(UI.section("节点来源", [sourcePicker]), padding: 18)
         let sharing = UI.panel(UI.section("局域网分享", [
             UI.secondary("供同一局域网中的其他设备使用"), shareButton, shareURLRow, qrView
         ]), padding: 18)
@@ -101,7 +100,6 @@ final class SharePage: WorkspacePage {
             workspace.shareServer?.update(config: yaml, fileName: profile.fileName + ".yaml")
         }
         let skipped = generated?.skippedNodes ?? 0
-        let templateProviders = generated?.templateProviders ?? []
         issueLabel.stringValue = ((generated?.issues.map(\.description) ?? []) + (skipped > 0 ? ["跳过 \(skipped) 个不支持的节点"] : [])).joined(separator: "\n")
         sourcePicker.selectItem(at: profile.sourceMode == "REFERENCE_SUBSCRIPTIONS" ? 1 : 0)
         let ready = model.generationIsCurrent && generated?.canExport == true
@@ -121,32 +119,10 @@ final class SharePage: WorkspacePage {
         issueLabel.stringValue = issueLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayedYAML = generated?.yaml ?? (model.generationIsCurrent ? "无法生成配置。请检查 YAML。" : "正在生成配置…")
         if preview.string != displayedYAML { preview.string = displayedYAML }
-        for child in bindingStack.arrangedSubviews { bindingStack.removeArrangedSubview(child); child.removeFromSuperview() }
-        if !templateProviders.isEmpty {
-            bindingStack.addArrangedSubview(UI.secondary("模板订阅 · 可选绑定"))
-            for name in templateProviders {
-                let picker = NSPopUpButton()
-                picker.addItem(withTitle: "不绑定 · 使用本地节点或直连")
-                picker.item(at: 0)?.representedObject = ""
-                for source in model.state.sources where source.providerCompatible == true && profile.selectedSourceIds.contains(source.id) {
-                    picker.addItem(withTitle: source.name); picker.lastItem?.representedObject = source.id
-                }
-                picker.select(picker.itemArray.first { ($0.representedObject as? String) == (profile.templateProviderBindings[name] ?? "") })
-                picker.target = self; picker.action = #selector(changeBinding(_:)); picker.identifier = NSUserInterfaceItemIdentifier(name)
-                bindingStack.addArrangedSubview(UI.horizontal([UI.secondary(name), picker]))
-            }
-        }
     }
     @objc private func changeSourceMode() {
         var profile = model.activeProfile
         profile.sourceMode = sourcePicker.indexOfSelectedItem == 1 ? "REFERENCE_SUBSCRIPTIONS" : "EMBED_NODES"
-        replace(profile)
-    }
-    @objc private func changeBinding(_ picker: NSPopUpButton) {
-        guard let name = picker.identifier?.rawValue else { return }
-        var profile = model.activeProfile
-        if let id = picker.selectedItem?.representedObject as? String, !id.isEmpty { profile.templateProviderBindings[name] = id }
-        else { profile.templateProviderBindings.removeValue(forKey: name) }
         replace(profile)
     }
     private func replace(_ profile: ConfigProfile) {

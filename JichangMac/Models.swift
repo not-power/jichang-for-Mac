@@ -172,6 +172,7 @@ struct ConfigProfile: Codable, Identifiable, Equatable, Sendable {
     var enabledRegions: Set<String> = ["hk", "tw", "jp", "sg", "us", "kr", "other"]
     var regionOverrides: [String: String] = [:]
     var templateId: String? = nil
+    // Retained for old state and backup compatibility; template placeholders are removed on output.
     var templateProviderBindings: [String: String] = [:]
     var mihomoSettings: [String: JSONValue] = [:]
     var advancedYaml: String? = nil

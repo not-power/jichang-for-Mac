@@ -6,8 +6,6 @@ struct GeneratedConfig: Sendable {
     var exportedNodes: Int
     var skippedNodes: Int
     var referencedSubscriptions: Int = 0
-    var unresolvedTemplateProviders: [String] = []
-    var templateProviders: [String] = []
     var issues: [ConfigIssue] = []
     var canExport: Bool { !issues.contains { $0.severity == .error } }
 }
@@ -36,40 +34,27 @@ enum MihomoConfigGenerator {
             guard let body = value as? [String: Any], (body["type"] as? String)?.lowercased() == "http" else { return nil }
             return isSubscriptionPlaceholder(body["url"] as? String ?? "") ? name : nil
         }.sorted()
-        let eligibleSources = selectedSources.filter { $0.providerCompatible == true }
-        let boundTemplates: [(String, SubscriptionSource)] = templatePlaceholderNames.compactMap { name in
-            guard let source = profile.templateProviderBindings[name].flatMap({ id in eligibleSources.first { $0.id == id } }) else { return nil }
-            return (name, source)
-        }
-        for (name, source) in boundTemplates {
-            var body = proxyProviders[name] as? [String: Any] ?? [:]
-            body["url"] = source.url
-            proxyProviders[name] = body
-        }
-        let boundSourceIDs = Set(boundTemplates.map { $0.1.id })
-        let providerSources = eligibleSources.filter { referenceMode || boundSourceIDs.contains($0.id) }
+        for name in templatePlaceholderNames { proxyProviders.removeValue(forKey: name) }
+        let providerSources = referenceMode ? selectedSources.filter { $0.providerCompatible == true } : []
         let providerSourceIDs = Set(providerSources.map(\.id))
         let nodes = selectedNodes.filter { supportedNodeTypes.contains($0.type.lowercased()) && ($0.sourceId == nil || !providerSourceIDs.contains($0.sourceId!)) }
         let nodeNames = makeUniqueNames(nodes)
         let nameByNodeID = Dictionary(zip(nodes.map(\.id), nodeNames), uniquingKeysWith: { first, _ in first })
         let allNodeNames = Dictionary(selectedNodes.map { ($0.id, safeName($0.name)) }, uniquingKeysWith: { first, _ in first })
-        let unresolvedTemplateProviders = templatePlaceholderNames.filter { name in !boundTemplates.contains(where: { $0.0 == name }) }
-        for name in unresolvedTemplateProviders { proxyProviders.removeValue(forKey: name) }
-        let genericSources = providerSources.filter { !boundSourceIDs.contains($0.id) }
         var usedProviderNames = Set(proxyProviders.keys).union(templatePlaceholderNames)
-        let genericProviderNames = genericSources.indices.map { index in
+        let genericProviderNames = providerSources.indices.map { index in
             var name = "订阅-\(index + 1)"
             while usedProviderNames.contains(name) { name += "-" }
             usedProviderNames.insert(name)
             return name
         }
-        for (index, source) in genericSources.enumerated() {
+        for (index, source) in providerSources.enumerated() {
             proxyProviders[genericProviderNames[index]] = [
                 "type": "http", "url": source.url, "path": "./providers/\(genericProviderNames[index]).yaml",
                 "interval": 86400, "health-check": ["enable": true, "url": "https://www.gstatic.com/generate_204", "interval": 300]
             ]
         }
-        let providerNames = boundTemplates.map(\.0) + genericProviderNames
+        let providerNames = genericProviderNames
         let enabledRegions = profile.enabledRegions
         let proxyRows = nodes.map { node -> [String: Any] in
             var proxy = node.options.mapValues(\.foundationValue)
@@ -118,13 +103,18 @@ enum MihomoConfigGenerator {
             // Only groups affected by an omitted placeholder receive a local fallback.
             // An independently configured empty group keeps its explicit empty members.
             let originalUse = group.extra["use"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            let omittedUse = originalUse.contains { unresolvedTemplateProviders.contains($0) }
-            if let use = row["use"] as? [String] { row["use"] = use.filter { !unresolvedTemplateProviders.contains($0) } }
+            let omittedUse = originalUse.contains { templatePlaceholderNames.contains($0) }
+            if let use = row["use"] as? [String] {
+                let remaining = use.filter { !templatePlaceholderNames.contains($0) }
+                if omittedUse && remaining.isEmpty { row.removeValue(forKey: "use") }
+                else { row["use"] = remaining }
+            }
             let includesProviders = row["include-all"] as? Bool == true || row["include-all-providers"] as? Bool == true
-            let omittedAutomaticProviders = includesProviders && !unresolvedTemplateProviders.isEmpty && proxyProviders.isEmpty
+            let omittedAutomaticProviders = includesProviders && !templatePlaceholderNames.isEmpty && proxyProviders.isEmpty
             if (omittedUse || omittedAutomaticProviders), (row["proxies"] as? [String] ?? []).isEmpty,
                (row["use"] as? [String] ?? []).isEmpty, !(includesProviders && !proxyProviders.isEmpty) {
-                row["proxies"] = nodeNames.isEmpty ? ["DIRECT"] : nodeNames
+                if !providerNames.isEmpty { row["use"] = providerNames }
+                else { row["proxies"] = nodeNames.isEmpty ? ["DIRECT"] : nodeNames }
             }
             if ["url-test", "fallback", "load-balance"].contains(group.type) {
                 row["url"] = row["url"] ?? "https://www.gstatic.com/generate_204"
@@ -175,16 +165,13 @@ enum MihomoConfigGenerator {
         }, uniquingKeysWith: { first, _ in first })
         let values = root.mapValues(JSONValue.init(foundationValue:))
         var issues = ConfigurationDiagnostics.inspect(state, profile: profile, root: values)
-        for name in unresolvedTemplateProviders {
-            issues.append(ConfigIssue(severity: .warning, location: "代理集合.\(name)", message: "未绑定的订阅占位符已跳过；相关空组使用本地节点，无节点时使用直连。可在分享页面选择绑定。"))
-        }
         for node in selectedNodes where !supportedNodeTypes.contains(node.type.lowercased()) {
             issues.append(ConfigIssue(severity: .error, location: "节点.\(node.name)", message: "当前版本不支持此协议：\(node.type)，不能静默忽略。"))
         }
         for node in nodes where node.server.isEmpty || !(1...65535).contains(node.port) {
             issues.append(ConfigIssue(severity: .error, location: "节点.\(node.name)", message: "服务器或端口无效。"))
         }
-        return GeneratedConfig(yaml: try ConfigDocument.dump(values), exportedNodes: nodes.count, skippedNodes: selectedNodes.filter { !supportedNodeTypes.contains($0.type.lowercased()) }.count, referencedSubscriptions: providerSources.count, unresolvedTemplateProviders: unresolvedTemplateProviders, templateProviders: templatePlaceholderNames, issues: issues)
+        return GeneratedConfig(yaml: try ConfigDocument.dump(values), exportedNodes: nodes.count, skippedNodes: selectedNodes.filter { !supportedNodeTypes.contains($0.type.lowercased()) }.count, referencedSubscriptions: providerSources.count, issues: issues)
     }
 
     private static func makeUniqueNames(_ nodes: [ProxyNode]) -> [String] {
