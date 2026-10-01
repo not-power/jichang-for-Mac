@@ -11,7 +11,7 @@
 
 [下载正式安装包](https://github.com/not-power/jichang-for-Mac/releases/latest)
 
-0.11.1（构建 34）提供 DMG 和打包后的 `.app` ZIP。安装包未经过 Apple 公证。
+0.11.2（构建 35）提供 DMG 和打包后的 `.app` ZIP。安装包未经过 Apple 公证。
 
 ## 源码
 
